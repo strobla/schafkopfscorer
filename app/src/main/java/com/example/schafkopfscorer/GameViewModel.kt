@@ -1,7 +1,3 @@
-// =================================================================================
-// GameViewModel.kt - Geschäftslogik und Zustandsverwaltung
-// =================================================================================
-
 package com.example.schafkopfscorer
 
 import androidx.lifecycle.ViewModel
@@ -10,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-// Hält den gesamten Zustand des aktuellen Spiels
+// Holds the entire state of the current game
 data class GameState(
     val players: List<Player> = emptyList(),
     val rounds: List<RoundResult> = emptyList(),
@@ -23,11 +19,9 @@ class GameViewModel : ViewModel() {
     val gameState: StateFlow<GameState> = _gameState.asStateFlow()
 
     init {
-        // Initializes the game with four default players
         resetGame()
     }
 
-    // Resets the game to its initial state
     fun resetGame() {
         val initialPlayers = listOf(
             Player(1, "Andi"),
@@ -42,89 +36,61 @@ class GameViewModel : ViewModel() {
         )
     }
 
-    // Fügt eine neue Runde hinzu und berechnet die Punkte
-    fun addRound(
-        gameType: GameType,
-        declaringPlayer: Player,
-        partnerPlayer: Player?, // kann null sein, wenn kein Rufspiel
-        playerPartyWon: Boolean, // NEU: Gewinnlogik wird jetzt als Parameter übergeben
-        playerPartyPoints: Int, // Wird für die Anzeige im Protokoll beibehalten
-        laufende: Int,
-        kontra: Boolean,
-        re: Boolean
-    ) {
-        // 1. Initialisierung der Boni
-        var isPlayerPartySchneider = false
-        var isPlayerPartySchwarz = false
+    // GEÄNDERT: Die Berechnungslogik für die Punkteverteilung ist neu
+    fun addRamschRound(scores: Map<Player, Int>, jungfrauPlayers: List<Player>) {
+        val tarif = 20 // Fester Tarif für Ramsch
 
-        // 2. Grundwert und Boni berechnen
-        var roundValue = gameType.baseTariff
-        val bonusTariff = 10 // Fester Tarif für Schneider/Schwarz/Laufende im MVP
+        val maxScore = scores.values.maxOrNull() ?: 0
+        val losers = scores.filter { it.value == maxScore }.keys.toList()
 
-        // NEU: Boni wie Schneider, Schwarz und Laufende gelten nicht für Bettel
-        if (gameType != GameType.BETTEL) {
-            val opponentPartyPoints = 120 - playerPartyPoints
-            val isOpponentPartySchneider = !playerPartyWon && playerPartyPoints < 31
-            val isOpponentPartySchwarz = !playerPartyWon && playerPartyPoints == 0
+        // Ein "Durchmarsch" (ein Spieler bekommt alle 120 Punkte) ist ein Gewinn.
+        // Die Jungfrau-Regel greift hier nicht.
+        val isDurchmarsch = maxScore == 120 && losers.size == 1
 
-            isPlayerPartySchneider = playerPartyWon && opponentPartyPoints < 30
-            isPlayerPartySchwarz = playerPartyWon && opponentPartyPoints == 0
-
-            if (isPlayerPartySchneider || isOpponentPartySchneider) {
-                roundValue += bonusTariff
-            }
-            if (isPlayerPartySchwarz || isOpponentPartySchwarz) {
-                // Annahme: Schwarz beinhaltet Schneider
-                roundValue += bonusTariff
-            }
-            // Annahme: Laufende ab 3 (bei Solo/Ruf) bzw. 2 (bei Wenz)
-            val laufendeThreshold = if (gameType == GameType.WENZ) 2 else 3
-            if (laufende >= laufendeThreshold) {
-                roundValue += laufende * bonusTariff
-            }
-        }
-
-        // 3. Multiplikatoren anwenden (gelten auch für Bettel)
-        if (kontra) roundValue *= 2
-        if (re) roundValue *= 2
-
-        // 4. Punkte verteilen
         val finalPoints = mutableMapOf<Player, Int>()
-        val allPlayers = _gameState.value.players
 
-        if (gameType.isSolo) {
-            // Solo-Spiel (inkl. Bettel): 1 gegen 3
-            val soloPlayerValue = if (playerPartyWon) roundValue * 3 else -roundValue * 3
-            val opponentValue = if (playerPartyWon) -roundValue else roundValue
-
-            allPlayers.forEach { player ->
-                finalPoints[player] = if (player == declaringPlayer) soloPlayerValue else opponentValue
+        if (isDurchmarsch) {
+            val winner = losers.first()
+            _gameState.value.players.forEach { player ->
+                finalPoints[player] = if (player.id == winner.id) {
+                    tarif * 3 // Gewinner bekommt +60
+                } else {
+                    -tarif // Verlierer bekommen -20
+                }
             }
         } else {
-            // Partnerspiel (Rufspiel): 2 gegen 2
-            val winnerValue = if (playerPartyWon) roundValue else -roundValue
-            val loserValue = -winnerValue
+            // NEUE LOGIK: Punkte werden basierend auf dem Jungfrau-Status der Gewinner verteilt.
+            val winners = _gameState.value.players.filter { it !in losers }
+            var totalLoss = 0
 
-            val playerParty = listOf(declaringPlayer, partnerPlayer)
+            winners.forEach { winner ->
+                val pointsWon = if (winner in jungfrauPlayers) {
+                    tarif * 2 // Jungfrau-Gewinner erhält doppelte Punkte
+                } else {
+                    tarif // Normaler Gewinner erhält einfache Punkte
+                }
+                finalPoints[winner] = pointsWon
+                totalLoss += pointsWon
+            }
 
-            allPlayers.forEach { player ->
-                finalPoints[player] = if (player in playerParty) winnerValue else loserValue
+            if (losers.isNotEmpty()) {
+                val pointsPerLoser = -totalLoss / losers.size
+                losers.forEach { loser ->
+                    finalPoints[loser] = pointsPerLoser
+                }
+            }
+            // Falls alle Spieler Verlierer sind (z.B. alle 30), werden 0 Punkte vergeben.
+            else if (winners.isEmpty() && losers.size == 4) {
+                _gameState.value.players.forEach { finalPoints[it] = 0 }
             }
         }
 
-        // 5. Neuen Spielzustand erstellen und UI aktualisieren
         val newRound = RoundResult(
-            roundNumber = _gameState.value.rounds.size + 1,
-            gameType = gameType,
-            declaringPlayer = declaringPlayer,
-            partnerPlayer = partnerPlayer,
-            playerPartyPoints = playerPartyPoints,
-            laufende = laufende,
-            isPlayerPartySchneider = isPlayerPartySchneider || isPlayerPartySchwarz,
-            isPlayerPartySchwarz = isPlayerPartySchwarz,
-            kontra = kontra,
-            re = re,
-            points = finalPoints
+            gameType = GameType.RAMSCH,
+            declaringPlayer = null, // Kein einzelner Spieler bei Ramsch
+            partnerPlayer = null,
+            points = finalPoints,
+            jungfrauPlayers = jungfrauPlayers // Speichert die Liste der Jungfrau-Spieler
         )
 
         _gameState.update { currentState ->
@@ -140,31 +106,100 @@ class GameViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Updates the name of a player across the entire game state.
-     * It rebuilds players, scores, and rounds to maintain data integrity.
-     */
+
+    fun addRound(
+        gameType: GameType,
+        declaringPlayer: Player,
+        partnerPlayer: Player?,
+        playerPartyWon: Boolean,
+        playerPartyPoints: Int,
+        laufende: Int,
+        kontra: Boolean,
+        re: Boolean
+    ) {
+        if (gameType == GameType.RAMSCH) return // Sollte von addRamschRound behandelt werden
+
+        val tarif = when (gameType) {
+            GameType.RUFSPIEL -> 20
+            GameType.FARBSOLO -> 60
+            GameType.WENZ -> 60
+            GameType.BETTEL -> 40
+            GameType.RAMSCH -> 0 // Sollte nicht vorkommen
+        }
+
+        var grundtarif = tarif
+        if (gameType != GameType.BETTEL) {
+            if (playerPartyWon) {
+                if (playerPartyPoints > 90) grundtarif += 10 // Schneider
+                if (playerPartyPoints == 120) grundtarif += 10 // Schwarz
+            } else {
+                if (playerPartyPoints < 30) grundtarif += 10 // Schneider
+                if (playerPartyPoints == 0) grundtarif += 10 // Schwarz
+            }
+            grundtarif += (laufende * 10)
+        }
+
+        if (kontra) grundtarif *= 2
+        if (re) grundtarif *= 2
+
+        val playerParty = when (gameType) {
+            GameType.RUFSPIEL -> listOf(declaringPlayer, partnerPlayer)
+            else -> listOf(declaringPlayer)
+        }.filterNotNull()
+
+        val opponentParty = _gameState.value.players.filter { it !in playerParty }
+
+        val winners = if (playerPartyWon) playerParty else opponentParty
+        val losers = if (playerPartyWon) opponentParty else playerParty
+
+        val finalPoints = mutableMapOf<Player, Int>()
+        _gameState.value.players.forEach { player ->
+            finalPoints[player] = when (player) {
+                in winners -> if (winners.size == 1) grundtarif * 3 else grundtarif
+                in losers -> if (losers.size == 1) -grundtarif * 3 else -grundtarif
+                else -> 0
+            }
+        }
+
+        val newRound = RoundResult(
+            gameType = gameType,
+            declaringPlayer = declaringPlayer,
+            partnerPlayer = partnerPlayer,
+            points = finalPoints,
+            jungfrauPlayers = emptyList() // Nicht anwendbar für Standardspiele
+        )
+
+        _gameState.update { currentState ->
+            val newRounds = currentState.rounds + newRound
+            val newTotalScores = mutableMapOf<Player, Int>()
+            currentState.players.forEach { player ->
+                newTotalScores[player] = (currentState.totalScores[player] ?: 0) + (finalPoints[player] ?: 0)
+            }
+            currentState.copy(
+                rounds = newRounds,
+                totalScores = newTotalScores
+            )
+        }
+    }
+
     fun updatePlayerName(playerToUpdate: Player, newName: String) {
         _gameState.update { currentState ->
             val updatedPlayer = playerToUpdate.copy(name = newName)
-
-            // Create the new list of players
             val newPlayers = currentState.players.map {
                 if (it.id == playerToUpdate.id) updatedPlayer else it
             }
-
-            // Rebuild the totalScores map with the new player object as key
             val newTotalScores = currentState.totalScores.mapKeys { (player, _) ->
                 if (player.id == playerToUpdate.id) updatedPlayer else player
             }
-
-            // Rebuild the rounds list, updating player objects within each RoundResult
             val newRounds = currentState.rounds.map { round ->
                 round.copy(
-                    declaringPlayer = if (round.declaringPlayer.id == playerToUpdate.id) updatedPlayer else round.declaringPlayer,
+                    declaringPlayer = if (round.declaringPlayer?.id == playerToUpdate.id) updatedPlayer else round.declaringPlayer,
                     partnerPlayer = if (round.partnerPlayer?.id == playerToUpdate.id) updatedPlayer else round.partnerPlayer,
                     points = round.points.mapKeys { (player, _) ->
                         if (player.id == playerToUpdate.id) updatedPlayer else player
+                    },
+                    jungfrauPlayers = round.jungfrauPlayers.map {
+                        if (it.id == playerToUpdate.id) updatedPlayer else it
                     }
                 )
             }
@@ -177,3 +212,4 @@ class GameViewModel : ViewModel() {
         }
     }
 }
+

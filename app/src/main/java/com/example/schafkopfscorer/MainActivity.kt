@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -75,6 +76,11 @@ class MainActivity : ComponentActivity() {
                         onDismiss = { showNewRoundDialog = false },
                         onSave = { gameType, player, partner, won, points, laufende, kontra, re ->
                             gameViewModel.addRound(gameType, player, partner, won, points, laufende, kontra, re)
+                            showNewRoundDialog = false
+                        },
+                        // GEÄNDERT: Übergabe der neuen Lambda-Funktion für Ramsch
+                        onSaveRamsch = { scores, jungfrauPlayers ->
+                            gameViewModel.addRamschRound(scores, jungfrauPlayers)
                             showNewRoundDialog = false
                         }
                     )
@@ -185,7 +191,6 @@ fun RoundHistory(rounds: List<RoundResult>, players: List<Player>) {
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // NEU: Spalte für die Spielnummer
                     Text("Nr.", modifier = Modifier.weight(0.7f), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
                     Text("Spiel", modifier = Modifier.weight(2f), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
                     players.forEach { player ->
@@ -211,9 +216,7 @@ fun RoundHistory(rounds: List<RoundResult>, players: List<Player>) {
                     )
                 }
             } else {
-                // GEÄNDERT: items zu itemsIndexed, um den Index zu erhalten
                 itemsIndexed(rounds.reversed()) { index, round ->
-                    // Die Spielnummer wird aus der Gesamtanzahl der Runden berechnet
                     val roundNumber = rounds.size - index
                     RoundRow(roundNumber = roundNumber, round = round, players = players)
                     Divider()
@@ -231,7 +234,6 @@ fun RoundRow(roundNumber: Int, round: RoundResult, players: List<Player>) {
             .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // NEU: Anzeige der Spielnummer
         Text(
             text = "$roundNumber",
             modifier = Modifier.weight(0.7f),
@@ -240,11 +242,24 @@ fun RoundRow(roundNumber: Int, round: RoundResult, players: List<Player>) {
         )
         Column(modifier = Modifier.weight(2f), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(round.gameType.displayName, fontSize = 14.sp)
-            Text(
-                "von ${round.declaringPlayer.name}",
-                fontSize = 10.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+
+            // NEU: Zeigt "(mit Jungfrau)" für entsprechende Runden an
+            if (round.gameType == GameType.RAMSCH && round.jungfrauPlayers.isNotEmpty()) {
+                Text(
+                    text = "(mit Jungfrau)",
+                    fontSize = 10.sp,
+                    fontStyle = FontStyle.Italic,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            round.declaringPlayer?.let {
+                Text(
+                    "von ${it.name}",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
         players.forEach { player ->
