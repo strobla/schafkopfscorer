@@ -8,14 +8,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.itemsIndexed // GEÄNDERT: Import
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive // NEU: Import
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Unarchive // NEU: Import
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha // NEU: Import
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -25,7 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.schafkopfscorer.ui.theme.SchafkopfScorerTheme
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 class MainActivity : ComponentActivity() {
 
     private val gameViewModel: GameViewModel by viewModels()
@@ -36,6 +40,8 @@ class MainActivity : ComponentActivity() {
             SchafkopfScorerTheme {
                 var showNewRoundDialog by remember { mutableStateOf(false) }
                 var showResetDialog by remember { mutableStateOf(false) }
+                // NEU: Dialog für Spieler-Verwaltung
+                var showPlayerManagementDialog by remember { mutableStateOf(false) }
                 val gameState by gameViewModel.gameState.collectAsState()
 
                 Scaffold(
@@ -48,6 +54,13 @@ class MainActivity : ComponentActivity() {
                                 actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                             ),
                             actions = {
+                                // NEU: Button für Spieler-Verwaltung
+                                IconButton(onClick = { showPlayerManagementDialog = true }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Group,
+                                        contentDescription = "Spieler verwalten"
+                                    )
+                                }
                                 IconButton(onClick = { showResetDialog = true }) {
                                     Icon(
                                         imageVector = Icons.Default.Refresh,
@@ -72,15 +85,16 @@ class MainActivity : ComponentActivity() {
 
                 if (showNewRoundDialog) {
                     NewRoundScreen(
-                        players = gameState.players,
+                        // GEÄNDERT: Übergibt 'allPlayers'
+                        allPlayers = gameState.players,
                         onDismiss = { showNewRoundDialog = false },
-                        onSave = { gameType, player, partner, won, points, laufende, kontra, re ->
-                            gameViewModel.addRound(gameType, player, partner, won, points, laufende, kontra, re)
+                        // GEÄNDERT: Lambda-Signaturen
+                        onSave = { gameType, player, partner, won, points, laufende, kontra, re, activePlayers ->
+                            gameViewModel.addRound(gameType, player, partner, won, points, laufende, kontra, re, activePlayers)
                             showNewRoundDialog = false
                         },
-                        // GEÄNDERT: Übergabe der neuen Lambda-Funktion für Ramsch
-                        onSaveRamsch = { scores, jungfrauPlayers ->
-                            gameViewModel.addRamschRound(scores, jungfrauPlayers)
+                        onSaveRamsch = { scores, jungfrauPlayers, activePlayers ->
+                            gameViewModel.addRamschRound(scores, jungfrauPlayers, activePlayers)
                             showNewRoundDialog = false
                         }
                     )
@@ -93,6 +107,18 @@ class MainActivity : ComponentActivity() {
                             showResetDialog = false
                         },
                         onDismiss = { showResetDialog = false }
+                    )
+                }
+
+                // NEU: Aufruf des Spieler-Verwaltungs-Dialogs
+                if (showPlayerManagementDialog) {
+                    PlayerManagementDialog(
+                        players = gameState.players,
+                        onDismiss = { showPlayerManagementDialog = false },
+                        onAddPlayer = { name -> gameViewModel.addPlayer(name) },
+                        // GEÄNDERT: Ruft de/activate auf
+                        onDeactivatePlayer = { player -> gameViewModel.deactivatePlayer(player) },
+                        onActivatePlayer = { player -> gameViewModel.activatePlayer(player) }
                     )
                 }
             }
@@ -128,10 +154,13 @@ fun GameScreen(modifier: Modifier = Modifier, gameState: GameState, viewModel: G
             }
         )
         Spacer(modifier = Modifier.height(16.dp))
+        // GEÄNDERT: Übergibt 'players' für dynamische Spalten
         RoundHistory(rounds = gameState.rounds, players = gameState.players)
     }
 }
 
+// GEÄNDERT: Verwendet FlowRow für dynamisches Layout
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ScoreHeader(
     scores: Map<Player, Int>,
@@ -141,30 +170,36 @@ fun ScoreHeader(
     Card(
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
-        Row(
+        // GEÄNDERT: Row -> FlowRow
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceAround
+                .padding(vertical = 12.dp, horizontal = 8.dp),
+            horizontalArrangement = Arrangement.SpaceAround,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             players.forEach { player ->
+                // NEU: Modifier, um inaktive Spieler auszugrauen
+                val modifier = if (player.isActive) Modifier else Modifier.alpha(0.6f)
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .weight(1f)
+                    modifier = modifier // GEÄNDERT: Modifier hier angewendet
                         .clickable { onPlayerClick(player) }
-                        .padding(vertical = 4.dp)
+                        .padding(horizontal = 8.dp)
+                        .width(IntrinsicSize.Min)
                 ) {
                     Text(
                         text = player.name,
                         style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = (scores[player] ?: 0).toString(),
                         style = MaterialTheme.typography.headlineMedium,
-                        color = if ((scores[player] ?: 0) >= 0) Color(0xFF008000) else MaterialTheme.colorScheme.error
+                        color = if ((scores[player] ?: 0) >= 0) Color(0xFF008000) else MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center
                     )
                 }
             }
@@ -193,10 +228,13 @@ fun RoundHistory(rounds: List<RoundResult>, players: List<Player>) {
                 ) {
                     Text("Nr.", modifier = Modifier.weight(0.7f), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
                     Text("Spiel", modifier = Modifier.weight(2f), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
+                    // GEÄNDERT: Dynamische Header-Spalten
                     players.forEach { player ->
+                        // NEU: Inaktive Spalten ausgrauen
+                        val modifier = if (player.isActive) Modifier.weight(1f) else Modifier.weight(1f).alpha(0.6f)
                         Text(
                             text = player.name.take(3),
-                            modifier = Modifier.weight(1f),
+                            modifier = modifier, // GEÄNDERT
                             textAlign = TextAlign.Center,
                             fontWeight = FontWeight.Bold
                         )
@@ -218,6 +256,7 @@ fun RoundHistory(rounds: List<RoundResult>, players: List<Player>) {
             } else {
                 itemsIndexed(rounds.reversed()) { index, round ->
                     val roundNumber = rounds.size - index
+                    // GEÄNDERT: Übergibt 'players'
                     RoundRow(roundNumber = roundNumber, round = round, players = players)
                     Divider()
                 }
@@ -243,7 +282,6 @@ fun RoundRow(roundNumber: Int, round: RoundResult, players: List<Player>) {
         Column(modifier = Modifier.weight(2f), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(round.gameType.displayName, fontSize = 14.sp)
 
-            // NEU: Zeigt "(mit Jungfrau)" für entsprechende Runden an
             if (round.gameType == GameType.RAMSCH && round.jungfrauPlayers.isNotEmpty()) {
                 Text(
                     text = "(mit Jungfrau)",
@@ -262,18 +300,22 @@ fun RoundRow(roundNumber: Int, round: RoundResult, players: List<Player>) {
             }
         }
 
+        // GEÄNDERT: Dynamische Punkte-Spalten
         players.forEach { player ->
+            // Holt Punkte; 0 für Aussetzer
             val points = round.points[player] ?: 0
+            // NEU: Inaktive Spalten ausgrauen
+            val modifier = if (player.isActive) Modifier.weight(1f) else Modifier.weight(1f).alpha(0.6f)
             Text(
                 text = if (points > 0) "+$points" else "$points",
-                modifier = Modifier.weight(1f),
+                modifier = modifier, // GEÄNDERT
                 textAlign = TextAlign.Center,
                 color = when {
                     points > 0 -> Color(0xFF008000)
                     points < 0 -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.onSurface
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant // Aussetzer sind grau
                 },
-                fontWeight = FontWeight.SemiBold
+                fontWeight = if(points != 0) FontWeight.SemiBold else FontWeight.Normal
             )
         }
     }
@@ -369,4 +411,127 @@ fun ResetConfirmationDialog(
         }
     )
 }
+
+// NEU: Dialog zur Verwaltung der Spielerliste
+@Composable
+fun PlayerManagementDialog(
+    players: List<Player>,
+    onDismiss: () -> Unit,
+    onAddPlayer: (String) -> Unit,
+    // GEÄNDERT: Funktionen zum De/Aktivieren
+    onDeactivatePlayer: (Player) -> Unit,
+    onActivatePlayer: (Player) -> Unit
+) {
+    var newPlayerName by remember { mutableStateOf("") }
+    var isAddError by remember { mutableStateOf(false) }
+    // NEU: Zählt aktive Spieler
+    val activePlayerCount = players.count { it.isActive }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = MaterialTheme.shapes.extraLarge
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Spieler verwalten",
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                Text("Spieler hinzufügen (Max. 7)", style = MaterialTheme.typography.titleMedium) // GEÄNDERT: Text
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = newPlayerName,
+                        onValueChange = {
+                            newPlayerName = it
+                            isAddError = it.isBlank()
+                        },
+                        label = { Text("Neuer Name") },
+                        modifier = Modifier.weight(1f),
+                        isError = isAddError,
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            if (newPlayerName.isNotBlank()) {
+                                onAddPlayer(newPlayerName)
+                                newPlayerName = ""
+                                isAddError = false
+                            } else {
+                                isAddError = true
+                            }
+                        },
+                        enabled = players.size < 7 // GEÄNDERT: Limit auf 7
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Hinzufügen")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Text("Spieler verwalten (Min. 4 aktiv)", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                    // BUGFIX: itemsIndexed statt items
+                    itemsIndexed(players) { _, player ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = player.name,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .alpha(if (player.isActive) 1f else 0.6f)
+                            )
+                            // NEU: Logik für De/Aktivieren-Button
+                            if (player.isActive) {
+                                IconButton(
+                                    onClick = { onDeactivatePlayer(player) },
+                                    enabled = activePlayerCount > 4 // Deaktivieren nur > 4
+                                ) {
+                                    Icon(
+                                        Icons.Default.Archive,
+                                        contentDescription = "Archivieren",
+                                        tint = if (activePlayerCount > 4) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                    )
+                                } else {
+                                    IconButton(
+                                        onClick = { onActivatePlayer(player) },
+                                        enabled = activePlayerCount < 7 // GEÄNDERT: Limit auf 7
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Unarchive,
+                                            contentDescription = "Reaktivieren",
+                                            tint = if (activePlayerCount < 6) Color(0xFF008000) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = onDismiss) {
+                            Text("Schließen")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 

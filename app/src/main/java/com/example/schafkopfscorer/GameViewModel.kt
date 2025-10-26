@@ -22,29 +22,57 @@ class GameViewModel : ViewModel() {
         resetGame()
     }
 
-    fun resetGame() {
-        val initialPlayers = listOf(
-            Player(1, "Andi"),
-            Player(2, "Babsi"),
-            Player(3, "Chris"),
-            Player(4, "Dani")
-        )
-        _gameState.value = GameState(
-            players = initialPlayers,
-            rounds = emptyList(),
-            totalScores = initialPlayers.associateWith { 0 }
-        )
+    // NEU: Spieler hinzufügen (bis max. 7)
+    fun addPlayer(name: String) {
+        _gameState.update { currentState ->
+            if (currentState.players.size >= 7) return // GEÄNDERT: Limit auf 7
+            val newId = (currentState.players.maxOfOrNull { it.id } ?: 0) + 1
+            val newPlayer = Player(newId, name, isActive = true)
+            currentState.copy(
+                players = currentState.players + newPlayer,
+                totalScores = currentState.totalScores + (newPlayer to 0)
+            )
+        }
     }
 
-    // GEÄNDERT: Die Berechnungslogik für die Punkteverteilung ist neu
-    fun addRamschRound(scores: Map<Player, Int>, jungfrauPlayers: List<Player>) {
-        val tarif = 20 // Fester Tarif für Ramsch
+    // GEÄNDERT: Spieler wird nur noch deaktiviert, nicht entfernt
+    fun deactivatePlayer(playerToDeactivate: Player) {
+        _gameState.update { currentState ->
+            // Prüft, ob noch 4 Spieler aktiv bleiben
+            val activePlayersCount = currentState.players.count { it.isActive }
+            if (activePlayersCount <= 4) return // Verhindert, dass weniger als 4 Spieler aktiv sind
+
+            val newPlayers = currentState.players.map {
+                if (it.id == playerToDeactivate.id) it.copy(isActive = false) else it
+            }
+            currentState.copy(players = newPlayers)
+        }
+    }
+
+    // NEU: Reaktiviert einen Spieler
+    fun activatePlayer(playerToActivate: Player) {
+        _gameState.update { currentState ->
+            val newPlayers = currentState.players.map {
+                if (it.id == playerToActivate.id) it.copy(isActive = true) else it
+            }
+            currentState.copy(players = newPlayers)
+        }
+    }
+
+
+    // GEÄNDERT: Benötigt jetzt 'activePlayers'
+    fun addRamschRound(
+        scores: Map<Player, Int>,
+        jungfrauPlayers: List<Player>,
+        activePlayers: List<Player>
+    ) {
+        val tarif = 20
 
         val maxScore = scores.values.maxOrNull() ?: 0
-        val losers = scores.filter { it.value == maxScore }.keys.toList()
+        // Sollte nicht passieren, da "Speichern" deaktiviert ist, wenn totalPoints < 1
+        if (maxScore == 0) return
 
-        // Ein "Durchmarsch" (ein Spieler bekommt alle 120 Punkte) ist ein Gewinn.
-        // Die Jungfrau-Regel greift hier nicht.
+        val losers = scores.filter { it.value == maxScore }.keys.toList()
         val isDurchmarsch = maxScore == 120 && losers.size == 1
 
         val finalPoints = mutableMapOf<Player, Int>()
@@ -52,45 +80,45 @@ class GameViewModel : ViewModel() {
         if (isDurchmarsch) {
             val winner = losers.first()
             _gameState.value.players.forEach { player ->
-                finalPoints[player] = if (player.id == winner.id) {
-                    tarif * 3 // Gewinner bekommt +60
-                } else {
-                    -tarif // Verlierer bekommen -20
+                finalPoints[player] = when {
+                    player.id == winner.id -> tarif * 3
+                    player in activePlayers -> -tarif
+                    else -> 0 // Aussetzer oder Inaktive
                 }
             }
         } else {
-            // NEUE LOGIK: Punkte werden basierend auf dem Jungfrau-Status der Gewinner verteilt.
-            val winners = _gameState.value.players.filter { it !in losers }
+            // ** START DER KORREKTUR **
+            // Normale Ramsch-Runde (kein Durchmarsch)
+
+            // 1. Finde die Gewinner
+            val winners = activePlayers.filter { it !in losers }
+
+            // 2. Berechne den Gesamtverlust basierend auf den Gewinnern
             var totalLoss = 0
-
             winners.forEach { winner ->
-                val pointsWon = if (winner in jungfrauPlayers) {
-                    tarif * 2 // Jungfrau-Gewinner erhält doppelte Punkte
-                } else {
-                    tarif // Normaler Gewinner erhält einfache Punkte
-                }
-                finalPoints[winner] = pointsWon
-                totalLoss += pointsWon
+                totalLoss += if (winner in jungfrauPlayers) tarif * 2 else tarif
             }
 
-            if (losers.isNotEmpty()) {
-                val pointsPerLoser = -totalLoss / losers.size
-                losers.forEach { loser ->
-                    finalPoints[loser] = pointsPerLoser
+            // 3. Berechne die Punkte pro Verlierer (sicherstellen, dass nicht durch 0 geteilt wird)
+            val pointsPerLoser = if (losers.isNotEmpty()) -totalLoss / losers.size else 0
+
+            // 4. Weise JEDEM Spieler Punkte zu (robustere Methode)
+            _gameState.value.players.forEach { player ->
+                finalPoints[player] = when {
+                    player in losers -> pointsPerLoser
+                    player in winners -> if (player in jungfrauPlayers) tarif * 2 else tarif
+                    else -> 0 // Aussetzer oder Inaktive
                 }
             }
-            // Falls alle Spieler Verlierer sind (z.B. alle 30), werden 0 Punkte vergeben.
-            else if (winners.isEmpty() && losers.size == 4) {
-                _gameState.value.players.forEach { finalPoints[it] = 0 }
-            }
+            // ** ENDE DER KORREKTUR **
         }
 
         val newRound = RoundResult(
             gameType = GameType.RAMSCH,
-            declaringPlayer = null, // Kein einzelner Spieler bei Ramsch
+            declaringPlayer = null,
             partnerPlayer = null,
             points = finalPoints,
-            jungfrauPlayers = jungfrauPlayers // Speichert die Liste der Jungfrau-Spieler
+            jungfrauPlayers = jungfrauPlayers
         )
 
         _gameState.update { currentState ->
@@ -107,6 +135,7 @@ class GameViewModel : ViewModel() {
     }
 
 
+    // GEÄNDERT: Benötigt jetzt 'activePlayers'
     fun addRound(
         gameType: GameType,
         declaringPlayer: Player,
@@ -115,16 +144,17 @@ class GameViewModel : ViewModel() {
         playerPartyPoints: Int,
         laufende: Int,
         kontra: Boolean,
-        re: Boolean
+        re: Boolean,
+        activePlayers: List<Player>
     ) {
-        if (gameType == GameType.RAMSCH) return // Sollte von addRamschRound behandelt werden
+        if (gameType == GameType.RAMSCH) return
 
         val tarif = when (gameType) {
             GameType.RUFSPIEL -> 20
             GameType.FARBSOLO -> 60
             GameType.WENZ -> 60
             GameType.BETTEL -> 40
-            GameType.RAMSCH -> 0 // Sollte nicht vorkommen
+            GameType.RAMSCH -> 0
         }
 
         var grundtarif = tarif
@@ -147,7 +177,8 @@ class GameViewModel : ViewModel() {
             else -> listOf(declaringPlayer)
         }.filterNotNull()
 
-        val opponentParty = _gameState.value.players.filter { it !in playerParty }
+        // GEÄNDERT: Gegner werden aus 'activePlayers' bestimmt
+        val opponentParty = activePlayers.filter { it !in playerParty }
 
         val winners = if (playerPartyWon) playerParty else opponentParty
         val losers = if (playerPartyWon) opponentParty else playerParty
@@ -157,7 +188,7 @@ class GameViewModel : ViewModel() {
             finalPoints[player] = when (player) {
                 in winners -> if (winners.size == 1) grundtarif * 3 else grundtarif
                 in losers -> if (losers.size == 1) -grundtarif * 3 else -grundtarif
-                else -> 0
+                else -> 0 // Aussetzer oder Inaktive
             }
         }
 
@@ -166,7 +197,7 @@ class GameViewModel : ViewModel() {
             declaringPlayer = declaringPlayer,
             partnerPlayer = partnerPlayer,
             points = finalPoints,
-            jungfrauPlayers = emptyList() // Nicht anwendbar für Standardspiele
+            jungfrauPlayers = emptyList()
         )
 
         _gameState.update { currentState ->
@@ -212,4 +243,5 @@ class GameViewModel : ViewModel() {
         }
     }
 }
+
 

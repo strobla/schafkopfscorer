@@ -2,7 +2,8 @@ package com.example.schafkopfscorer
 
 data class Player(
     val id: Int,
-    val name: String
+    val name: String,
+    val isActive: Boolean = true // NEU: Status des Spielers
 )
 
 enum class GameType(val displayName: String) {
@@ -18,7 +19,6 @@ data class RoundResult(
     val declaringPlayer: Player?,
     val partnerPlayer: Player?,
     val points: Map<Player, Int>,
-    // NEU: Liste für Spieler, die "Jungfrau" geblieben sind
     val jungfrauPlayers: List<Player> = emptyList()
 )
 

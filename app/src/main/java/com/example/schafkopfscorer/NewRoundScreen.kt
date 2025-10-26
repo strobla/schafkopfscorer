@@ -16,12 +16,26 @@ import androidx.compose.ui.window.Dialog
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun NewRoundScreen(
-    players: List<Player>,
+    allPlayers: List<Player>,
     onDismiss: () -> Unit,
-    onSave: (gameType: GameType, player: Player, partner: Player?, won: Boolean, points: Int, laufende: Int, kontra: Boolean, re: Boolean) -> Unit,
-    onSaveRamsch: (scores: Map<Player, Int>, jungfrauPlayers: List<Player>) -> Unit
+    onSave: (gameType: GameType, player: Player, partner: Player?, won: Boolean, points: Int, laufende: Int, kontra: Boolean, re: Boolean, activePlayers: List<Player>) -> Unit,
+    onSaveRamsch: (scores: Map<Player, Int>, jungfrauPlayers: List<Player>, activePlayers: List<Player>) -> Unit
 ) {
     var selectedGameType by remember { mutableStateOf(GameType.RUFSPIEL) }
+    var activePlayers by remember { mutableStateOf<Set<Player>>(emptySet()) }
+
+    // NEU: Filtert nur aktive Spieler für die Auswahl
+    val activePlayersInTable = allPlayers.filter { it.isActive }
+
+    // NEU: Wenn 4 aktive Spieler, sind alle aktiv.
+    LaunchedEffect(activePlayersInTable) {
+        if (activePlayersInTable.size == 4) {
+            activePlayers = activePlayersInTable.toSet()
+        }
+    }
+
+    val isPlayerSelectionValid = activePlayersInTable.size == 4 || activePlayers.size == 4
+    val currentRoundPlayers = if (activePlayersInTable.size == 4) activePlayersInTable else activePlayers.toList()
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -40,33 +54,81 @@ fun NewRoundScreen(
                         .padding(bottom = 16.dp)
                 )
 
-                Text("Spielart", style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(8.dp))
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    val gameTypes = GameType.values()
-                    gameTypes.forEach { gameType ->
-                        FilterChip(
-                            selected = selectedGameType == gameType,
-                            onClick = { selectedGameType = gameType },
-                            label = { Text(gameType.displayName) }
+                // NEU: Sektion zur Spielerauswahl, wenn > 4 aktive Spieler
+                if (activePlayersInTable.size > 4) {
+                    Text("Wer spielt diese Runde? (Genau 4 auswählen)", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        // GEÄNDERT: Iteriert nur über aktive Spieler
+                        activePlayersInTable.forEach { player ->
+                            FilterChip(
+                                selected = player in activePlayers,
+                                onClick = {
+                                    activePlayers = if (player in activePlayers) {
+                                        activePlayers - player
+                                    } else {
+                                        activePlayers + player
+                                    }
+                                },
+                                label = { Text(player.name) }
+                            )
+                        }
+                    }
+                    if (!isPlayerSelectionValid) {
+                        Text(
+                            "Bitte genau 4 Spieler auswählen (${activePlayers.size}/4)",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 4.dp)
                         )
                     }
+                    Divider(modifier = Modifier.padding(vertical = 16.dp))
                 }
 
-                Divider(modifier = Modifier.padding(vertical = 16.dp))
+                // Der Rest des Formulars ist nur aktiv, wenn 4 Spieler ausgewählt sind
+                if (isPlayerSelectionValid) {
+                    Text("Spielart", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        GameType.values().forEach { gameType ->
+                            FilterChip(
+                                selected = selectedGameType == gameType,
+                                onClick = { selectedGameType = gameType },
+                                label = { Text(gameType.displayName) }
+                            )
+                        }
+                    }
 
-                if (selectedGameType == GameType.RAMSCH) {
-                    RamschInputForm(players = players, onDismiss = onDismiss, onSave = onSaveRamsch)
-                } else {
-                    StandardInputForm(
-                        players = players,
-                        selectedGameType = selectedGameType,
-                        onDismiss = onDismiss,
-                        onSave = onSave
-                    )
+                    Divider(modifier = Modifier.padding(vertical = 16.dp))
+
+                    if (selectedGameType == GameType.RAMSCH) {
+                        RamschInputForm(
+                            // GEÄNDERT: Übergibt nur die 4 aktiven Spieler
+                            players = currentRoundPlayers,
+                            onDismiss = onDismiss,
+                            onSave = { scores, jungfrauPlayers ->
+                                // GEÄNDERT: Übergibt 'activePlayers'
+                                onSaveRamsch(scores, jungfrauPlayers, currentRoundPlayers)
+                            }
+                        )
+                    } else {
+                        StandardInputForm(
+                            // GEÄNDERT: Übergibt nur die 4 aktiven Spieler
+                            players = currentRoundPlayers,
+                            selectedGameType = selectedGameType,
+                            onDismiss = onDismiss,
+                            onSave = { gameType, player, partner, won, points, laufende, kontra, re ->
+                                // GEÄNDERT: Übergibt 'activePlayers'
+                                onSave(gameType, player, partner, won, points, laufende, kontra, re, currentRoundPlayers)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -76,7 +138,7 @@ fun NewRoundScreen(
 
 @Composable
 private fun RamschInputForm(
-    players: List<Player>,
+    players: List<Player>, // Erhält jetzt nur die 4 aktiven Spieler
     onDismiss: () -> Unit,
     onSave: (scores: Map<Player, Int>, jungfrauPlayers: List<Player>) -> Unit
 ) {
@@ -85,14 +147,13 @@ private fun RamschInputForm(
     val scoreInts = scores.mapValues { it.value.toIntOrNull() ?: 0 }
     val totalPoints = scoreInts.values.sum()
 
-    // GEÄNDERT: Neue Validierungslogik. Speichern ist möglich,
-    // wenn mindestens 1 Punkt eingetragen ist und die Summe 120 nicht überschreitet.
     val isSaveEnabled = totalPoints in 1..120
 
     Column {
         Text("Augen der Spieler (nur Verlierer eintragen genügt)", style = MaterialTheme.typography.titleMedium)
         Spacer(modifier = Modifier.height(8.dp))
 
+        // Baut UI nur für die 4 aktiven Spieler
         players.forEach { player ->
             OutlinedTextField(
                 value = scores[player] ?: "",
@@ -106,7 +167,6 @@ private fun RamschInputForm(
 
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            // GEÄNDERT: Der Text ist allgemeiner und zeigt einen Fehler nur bei > 120 an.
             text = "Summe der eingetragenen Augen: $totalPoints",
             style = MaterialTheme.typography.bodyMedium,
             color = if (totalPoints > 120) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
@@ -114,6 +174,7 @@ private fun RamschInputForm(
 
         Spacer(modifier = Modifier.height(16.dp))
         Text("Jungfrau (keinen Stich gemacht)", style = MaterialTheme.typography.titleMedium)
+        // Baut UI nur für die 4 aktiven Spieler
         players.forEach { player ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -146,7 +207,6 @@ private fun RamschInputForm(
             Spacer(modifier = Modifier.width(8.dp))
             Button(
                 onClick = { onSave(scoreInts, jungfrauPlayers.toList()) },
-                // GEÄNDERT: Verwendet die neue Validierungslogik.
                 enabled = isSaveEnabled
             ) {
                 Text("Speichern")
@@ -155,9 +215,10 @@ private fun RamschInputForm(
     }
 }
 
+// ** HIER WAR DER FEHLER - DIESE FUNKTION HAT GEFEHLT **
 @Composable
 private fun StandardInputForm(
-    players: List<Player>,
+    players: List<Player>, // Erhält jetzt nur die 4 aktiven Spieler
     selectedGameType: GameType,
     onDismiss: () -> Unit,
     onSave: (gameType: GameType, player: Player, partner: Player?, won: Boolean, points: Int, laufende: Int, kontra: Boolean, re: Boolean) -> Unit
@@ -170,7 +231,9 @@ private fun StandardInputForm(
     var kontra by remember { mutableStateOf(false) }
     var re by remember { mutableStateOf(false) }
 
-    LaunchedEffect(selectedGameType) {
+    LaunchedEffect(selectedGameType, players) {
+        // Stellt sicher, dass der Spieler zurückgesetzt wird, wenn sich die aktiven Spieler ändern
+        declaringPlayer = players.first()
         if (selectedGameType != GameType.RUFSPIEL) {
             partnerPlayer = null
         }
@@ -261,6 +324,7 @@ private fun StandardInputForm(
     }
 }
 
+// ** HIER WAR DER FEHLER - DIESE FUNKTION HAT GEFEHLT **
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerDropdown(
