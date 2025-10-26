@@ -22,15 +22,21 @@ class GameViewModel : ViewModel() {
         resetGame()
     }
 
+    fun resetGame() {
+        _gameState.value = GameState()
+    }
+
     // NEU: Spieler hinzufügen (bis max. 7)
     fun addPlayer(name: String) {
         _gameState.update { currentState ->
-            if (currentState.players.size >= 7) return // GEÄNDERT: Limit auf 7
+            if (currentState.players.size >= 7) return@update currentState // GEÄNDERT: Limit auf 7
             val newId = (currentState.players.maxOfOrNull { it.id } ?: 0) + 1
             val newPlayer = Player(newId, name, isActive = true)
+            // Berechnet Scores neu, falls Spieler hinzugefügt wird
+            val newTotalScores = recalculateTotalScores(currentState.rounds, currentState.players + newPlayer)
             currentState.copy(
                 players = currentState.players + newPlayer,
-                totalScores = currentState.totalScores + (newPlayer to 0)
+                totalScores = newTotalScores // Fügt neuen Spieler mit Score 0 hinzu
             )
         }
     }
@@ -40,7 +46,7 @@ class GameViewModel : ViewModel() {
         _gameState.update { currentState ->
             // Prüft, ob noch 4 Spieler aktiv bleiben
             val activePlayersCount = currentState.players.count { it.isActive }
-            if (activePlayersCount <= 4) return // Verhindert, dass weniger als 4 Spieler aktiv sind
+            if (activePlayersCount <= 4) return@update currentState // Verhindert, dass weniger als 4 Spieler aktiv sind
 
             val newPlayers = currentState.players.map {
                 if (it.id == playerToDeactivate.id) it.copy(isActive = false) else it
@@ -59,6 +65,23 @@ class GameViewModel : ViewModel() {
         }
     }
 
+    // NEU: Private Hilfsfunktion zur Neuberechnung aller Scores
+    // Wird aufgerufen, wenn Runden hinzugefügt, bearbeitet oder Spieler hinzugefügt werden.
+    private fun recalculateTotalScores(rounds: List<RoundResult>, players: List<Player>): Map<Player, Int> {
+        val newTotalScores = players.associateWith { 0 }.toMutableMap()
+        rounds.forEach { round ->
+            round.points.forEach { (playerFromRound, points) ->
+                // Finde den Spieler in der aktuellen Spielerliste anhand der ID
+                // Wichtig, falls sich der Name geändert hat
+                val currentPlayerState = players.find { it.id == playerFromRound.id }
+                if (currentPlayerState != null) {
+                    newTotalScores[currentPlayerState] = (newTotalScores[currentPlayerState] ?: 0) + points
+                }
+            }
+        }
+        return newTotalScores
+    }
+
 
     // GEÄNDERT: Benötigt jetzt 'activePlayers'
     fun addRamschRound(
@@ -73,12 +96,14 @@ class GameViewModel : ViewModel() {
         if (maxScore == 0) return
 
         val losers = scores.filter { it.value == maxScore }.keys.toList()
-        val isDurchmarsch = maxScore == 120 && losers.size == 1
+        // GEÄNDERT: Durchmarsch-Grenze von 120 auf >= 90 gesenkt
+        val isDurchmarsch = maxScore >= 90 && losers.size == 1
 
         val finalPoints = mutableMapOf<Player, Int>()
 
         if (isDurchmarsch) {
             val winner = losers.first()
+            // GEÄNDERT: Nutzt die komplette Spielerliste
             _gameState.value.players.forEach { player ->
                 finalPoints[player] = when {
                     player.id == winner.id -> tarif * 3
@@ -87,22 +112,14 @@ class GameViewModel : ViewModel() {
                 }
             }
         } else {
-            // ** START DER KORREKTUR **
-            // Normale Ramsch-Runde (kein Durchmarsch)
-
-            // 1. Finde die Gewinner
             val winners = activePlayers.filter { it !in losers }
-
-            // 2. Berechne den Gesamtverlust basierend auf den Gewinnern
             var totalLoss = 0
             winners.forEach { winner ->
                 totalLoss += if (winner in jungfrauPlayers) tarif * 2 else tarif
             }
-
-            // 3. Berechne die Punkte pro Verlierer (sicherstellen, dass nicht durch 0 geteilt wird)
             val pointsPerLoser = if (losers.isNotEmpty()) -totalLoss / losers.size else 0
 
-            // 4. Weise JEDEM Spieler Punkte zu (robustere Methode)
+            // GEÄNDERT: Nutzt die komplette Spielerliste
             _gameState.value.players.forEach { player ->
                 finalPoints[player] = when {
                     player in losers -> pointsPerLoser
@@ -110,23 +127,22 @@ class GameViewModel : ViewModel() {
                     else -> 0 // Aussetzer oder Inaktive
                 }
             }
-            // ** ENDE DER KORREKTUR **
         }
 
         val newRound = RoundResult(
+            id = System.currentTimeMillis(), // NEU
             gameType = GameType.RAMSCH,
             declaringPlayer = null,
             partnerPlayer = null,
             points = finalPoints,
-            jungfrauPlayers = jungfrauPlayers
+            jungfrauPlayers = jungfrauPlayers,
+            activePlayers = activePlayers // NEU
         )
 
         _gameState.update { currentState ->
             val newRounds = currentState.rounds + newRound
-            val newTotalScores = mutableMapOf<Player, Int>()
-            currentState.players.forEach { player ->
-                newTotalScores[player] = (currentState.totalScores[player] ?: 0) + (finalPoints[player] ?: 0)
-            }
+            // GEÄNDERT: Ruft Neuberechnung auf
+            val newTotalScores = recalculateTotalScores(newRounds, currentState.players)
             currentState.copy(
                 rounds = newRounds,
                 totalScores = newTotalScores
@@ -140,7 +156,7 @@ class GameViewModel : ViewModel() {
         gameType: GameType,
         declaringPlayer: Player,
         partnerPlayer: Player?,
-        playerPartyWon: Boolean,
+        playerPartyWon: Boolean, // Kommt von der UI (Switch)
         playerPartyPoints: Int,
         laufende: Int,
         kontra: Boolean,
@@ -151,15 +167,22 @@ class GameViewModel : ViewModel() {
 
         val tarif = when (gameType) {
             GameType.RUFSPIEL -> 20
-            GameType.FARBSOLO -> 60
-            GameType.WENZ -> 60
-            GameType.BETTEL -> 40
+            GameType.FARBSOLO -> 50
+            GameType.WENZ -> 50
+            GameType.BETTEL -> 50
             GameType.RAMSCH -> 0
+            GameType.KORREKTUR -> 0 // Korrektur sollte hier nicht erstellt werden
+        }
+
+        val actualPlayerPartyWon = if (gameType != GameType.BETTEL) {
+            playerPartyPoints > 60
+        } else {
+            playerPartyWon
         }
 
         var grundtarif = tarif
         if (gameType != GameType.BETTEL) {
-            if (playerPartyWon) {
+            if (actualPlayerPartyWon) {
                 if (playerPartyPoints > 90) grundtarif += 10 // Schneider
                 if (playerPartyPoints == 120) grundtarif += 10 // Schwarz
             } else {
@@ -177,13 +200,13 @@ class GameViewModel : ViewModel() {
             else -> listOf(declaringPlayer)
         }.filterNotNull()
 
-        // GEÄNDERT: Gegner werden aus 'activePlayers' bestimmt
         val opponentParty = activePlayers.filter { it !in playerParty }
 
-        val winners = if (playerPartyWon) playerParty else opponentParty
-        val losers = if (playerPartyWon) opponentParty else playerParty
+        val winners = if (actualPlayerPartyWon) playerParty else opponentParty
+        val losers = if (actualPlayerPartyWon) opponentParty else playerParty
 
         val finalPoints = mutableMapOf<Player, Int>()
+        // GEÄNDERT: Nutzt die komplette Spielerliste
         _gameState.value.players.forEach { player ->
             finalPoints[player] = when (player) {
                 in winners -> if (winners.size == 1) grundtarif * 3 else grundtarif
@@ -193,19 +216,47 @@ class GameViewModel : ViewModel() {
         }
 
         val newRound = RoundResult(
+            id = System.currentTimeMillis(), // NEU
             gameType = gameType,
             declaringPlayer = declaringPlayer,
             partnerPlayer = partnerPlayer,
             points = finalPoints,
-            jungfrauPlayers = emptyList()
+            jungfrauPlayers = emptyList(),
+            activePlayers = activePlayers // NEU
         )
 
         _gameState.update { currentState ->
             val newRounds = currentState.rounds + newRound
-            val newTotalScores = mutableMapOf<Player, Int>()
-            currentState.players.forEach { player ->
-                newTotalScores[player] = (currentState.totalScores[player] ?: 0) + (finalPoints[player] ?: 0)
+            // GEÄNDERT: Ruft Neuberechnung auf
+            val newTotalScores = recalculateTotalScores(newRounds, currentState.players)
+            currentState.copy(
+                rounds = newRounds,
+                totalScores = newTotalScores
+            )
+        }
+    }
+
+    // NEU: Funktion zum Bearbeiten einer existierenden Runde
+    fun updateRound(roundId: Long, newManualPoints: Map<Player, Int>) {
+        _gameState.update { currentState ->
+            val roundToUpdate = currentState.rounds.find { it.id == roundId } ?: return@update currentState
+
+            // Stellt sicher, dass die Map alle Spieler enthält
+            val completeNewPoints = currentState.players.associateWith { player ->
+                newManualPoints[player] ?: 0 // Nimm den neuen Punktwert oder 0
             }
+
+            val updatedRound = roundToUpdate.copy(
+                points = completeNewPoints,
+                gameType = GameType.KORREKTUR // Setzt Spieltyp auf "Korrektur"
+            )
+
+            val newRounds = currentState.rounds.map {
+                if (it.id == roundId) updatedRound else it
+            }
+            // GEÄNDERT: Ruft Neuberechnung auf
+            val newTotalScores = recalculateTotalScores(newRounds, currentState.players)
+
             currentState.copy(
                 rounds = newRounds,
                 totalScores = newTotalScores
@@ -219,6 +270,9 @@ class GameViewModel : ViewModel() {
             val newPlayers = currentState.players.map {
                 if (it.id == playerToUpdate.id) updatedPlayer else it
             }
+
+            // WICHTIG: Muss die Player-Objekte in allen Listen ersetzen
+
             val newTotalScores = currentState.totalScores.mapKeys { (player, _) ->
                 if (player.id == playerToUpdate.id) updatedPlayer else player
             }
@@ -229,19 +283,24 @@ class GameViewModel : ViewModel() {
                     points = round.points.mapKeys { (player, _) ->
                         if (player.id == playerToUpdate.id) updatedPlayer else player
                     },
+                    activePlayers = round.activePlayers.map {
+                        if (it.id == playerToUpdate.id) updatedPlayer else it
+                    },
                     jungfrauPlayers = round.jungfrauPlayers.map {
                         if (it.id == playerToUpdate.id) updatedPlayer else it
                     }
                 )
             }
 
+            // Berechnet Scores neu, um Konsistenz sicherzustellen
+            val finalTotalScores = recalculateTotalScores(newRounds, newPlayers)
+
             currentState.copy(
                 players = newPlayers,
-                totalScores = newTotalScores,
+                totalScores = finalTotalScores,
                 rounds = newRounds
             )
         }
     }
 }
-
 

@@ -11,14 +11,16 @@ enum class GameType(val displayName: String) {
     WENZ("Wenz"),
     FARBSOLO("Farbsolo"),
     BETTEL("Bettel"),
-    RAMSCH("Ramsch")
+    RAMSCH("Ramsch"),
+    KORREKTUR("Korrektur") // NEU: Für manuelle Änderungen
 }
 
 data class RoundResult(
+    val id: Long = System.currentTimeMillis(), // NEU: Eindeutige ID
     val gameType: GameType,
     val declaringPlayer: Player?,
     val partnerPlayer: Player?,
     val points: Map<Player, Int>,
+    val activePlayers: List<Player>, // NEU: Speichert, wer gespielt hat
     val jungfrauPlayers: List<Player> = emptyList()
 )
-

@@ -9,6 +9,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed // GEÄNDERT: Import
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive // NEU: Import
@@ -23,6 +26,7 @@ import androidx.compose.ui.draw.alpha // NEU: Import
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,8 +44,10 @@ class MainActivity : ComponentActivity() {
             SchafkopfScorerTheme {
                 var showNewRoundDialog by remember { mutableStateOf(false) }
                 var showResetDialog by remember { mutableStateOf(false) }
-                // NEU: Dialog für Spieler-Verwaltung
                 var showPlayerManagementDialog by remember { mutableStateOf(false) }
+                // NEU: Zustand für die Bearbeitung einer Runde
+                var roundToEdit by remember { mutableStateOf<RoundResult?>(null) }
+
                 val gameState by gameViewModel.gameState.collectAsState()
 
                 Scaffold(
@@ -79,7 +85,11 @@ class MainActivity : ComponentActivity() {
                     GameScreen(
                         modifier = Modifier.padding(paddingValues),
                         gameState = gameState,
-                        viewModel = gameViewModel
+                        viewModel = gameViewModel,
+                        // NEU: Lambda übergeben, um Dialog zu öffnen
+                        onRoundClick = { round ->
+                            roundToEdit = round
+                        }
                     )
                 }
 
@@ -121,13 +131,31 @@ class MainActivity : ComponentActivity() {
                         onActivatePlayer = { player -> gameViewModel.activatePlayer(player) }
                     )
                 }
+
+                // NEU: Dialog zur Rundenbearbeitung
+                roundToEdit?.let { round ->
+                    EditRoundDialog(
+                        round = round,
+                        allPlayers = gameState.players,
+                        onDismiss = { roundToEdit = null },
+                        onSave = { roundId, newPoints ->
+                            gameViewModel.updateRound(roundId, newPoints)
+                            roundToEdit = null
+                        }
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-fun GameScreen(modifier: Modifier = Modifier, gameState: GameState, viewModel: GameViewModel) {
+fun GameScreen(
+    modifier: Modifier = Modifier,
+    gameState: GameState,
+    viewModel: GameViewModel,
+    onRoundClick: (RoundResult) -> Unit // NEU: Callback für Klick
+) {
     var playerToEdit by remember { mutableStateOf<Player?>(null) }
 
     playerToEdit?.let { player ->
@@ -154,8 +182,12 @@ fun GameScreen(modifier: Modifier = Modifier, gameState: GameState, viewModel: G
             }
         )
         Spacer(modifier = Modifier.height(16.dp))
-        // GEÄNDERT: Übergibt 'players' für dynamische Spalten
-        RoundHistory(rounds = gameState.rounds, players = gameState.players)
+        // GEÄNDERT: Übergibt 'players' und 'onRoundClick'
+        RoundHistory(
+            rounds = gameState.rounds,
+            players = gameState.players,
+            onRoundClick = onRoundClick
+        )
     }
 }
 
@@ -208,8 +240,12 @@ fun ScoreHeader(
 }
 
 @Composable
-fun RoundHistory(rounds: List<RoundResult>, players: List<Player>) {
-    Text("Protokoll", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
+fun RoundHistory(
+    rounds: List<RoundResult>,
+    players: List<Player>,
+    onRoundClick: (RoundResult) -> Unit // NEU: Callback für Klick
+) {
+    Text("Protokoll (Runde anklicken zum Bearbeiten)", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)) // HINWEIS HINZUGEFÜGT
     Card(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -256,8 +292,13 @@ fun RoundHistory(rounds: List<RoundResult>, players: List<Player>) {
             } else {
                 itemsIndexed(rounds.reversed()) { index, round ->
                     val roundNumber = rounds.size - index
-                    // GEÄNDERT: Übergibt 'players'
-                    RoundRow(roundNumber = roundNumber, round = round, players = players)
+                    // GEÄNDERT: Übergibt 'players' und 'onRoundClick'
+                    RoundRow(
+                        roundNumber = roundNumber,
+                        round = round,
+                        players = players,
+                        onClick = { onRoundClick(round) } // NEU
+                    )
                     Divider()
                 }
             }
@@ -266,10 +307,16 @@ fun RoundHistory(rounds: List<RoundResult>, players: List<Player>) {
 }
 
 @Composable
-fun RoundRow(roundNumber: Int, round: RoundResult, players: List<Player>) {
+fun RoundRow(
+    roundNumber: Int,
+    round: RoundResult,
+    players: List<Player>,
+    onClick: () -> Unit // NEU
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick) // NEU: Macht die Zeile klickbar
             .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -290,6 +337,15 @@ fun RoundRow(roundNumber: Int, round: RoundResult, players: List<Player>) {
                     color = MaterialTheme.colorScheme.primary
                 )
             }
+            // NEU: Zeigt an, ob korrigiert
+            if (round.gameType == GameType.KORREKTUR) {
+                Text(
+                    text = "(Korrigiert)",
+                    fontSize = 10.sp,
+                    fontStyle = FontStyle.Italic,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
 
             round.declaringPlayer?.let {
                 Text(
@@ -304,7 +360,7 @@ fun RoundRow(roundNumber: Int, round: RoundResult, players: List<Player>) {
         players.forEach { player ->
             // Holt Punkte; 0 für Aussetzer
             val points = round.points[player] ?: 0
-            // NEU: Inaktive Spalten ausgrauen
+            // NEU: Inaktive Spalten ausgrauen (basierend auf globalem Status)
             val modifier = if (player.isActive) Modifier.weight(1f) else Modifier.weight(1f).alpha(0.6f)
             Text(
                 text = if (points > 0) "+$points" else "$points",
@@ -412,7 +468,121 @@ fun ResetConfirmationDialog(
     )
 }
 
-// NEU: Dialog zur Verwaltung der Spielerliste
+// NEU: Dialog zur manuellen Korrektur einer Runde
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditRoundDialog(
+    round: RoundResult,
+    allPlayers: List<Player>,
+    onDismiss: () -> Unit,
+    onSave: (roundId: Long, newPoints: Map<Player, Int>) -> Unit
+) {
+    // Initialisiert die Scores für alle *aktuellen* Spieler,
+    // nimmt den Wert aus der Runde, falls vorhanden, sonst 0.
+    var scores by remember {
+        mutableStateOf(
+            allPlayers.associateWith { player ->
+                (round.points.entries.find { it.key.id == player.id }?.value ?: 0).toString()
+            }
+        )
+    }
+
+    // Konvertiert die Text-Scores in Integer
+    val scoreInts = allPlayers.associateWith {
+        scores[it]?.toIntOrNull() ?: 0
+    }
+    // Berechnet die Summe aller eingetragenen Punkte
+    val totalSum = scoreInts.values.sum()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(shape = MaterialTheme.shapes.extraLarge) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "Runde korrigieren",
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Text(
+                    text = "Spiel: ${round.gameType.displayName} (von ${round.declaringPlayer?.name ?: "N/A"})",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(bottom = 16.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+
+                allPlayers.forEach { player ->
+                    // Spieler war in der *originalen* Runde aktiv?
+                    // Prüft anhand der ID, falls sich Namen geändert haben
+                    val playerWasActiveInRound = round.activePlayers.any { it.id == player.id }
+
+                    OutlinedTextField(
+                        value = scores[player] ?: "0",
+                        onValueChange = { newValue ->
+                            // Erlaube nur Zahlen und ein optionales Minus am Anfang
+                            if (newValue.matches(Regex("-?\\d*"))) {
+                                scores = scores.toMutableMap().apply { put(player, newValue) }
+                            }
+                        },
+                        label = { Text(player.name) },
+                        // Feld ist nur editierbar, wenn der Spieler in der originalen Runde aktiv war
+                        enabled = playerWasActiveInRound,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .alpha(if (playerWasActiveInRound) 1f else 0.6f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        // Zeige 0 an, wenn der Spieler nicht aktiv war
+                        placeholder = { if (!playerWasActiveInRound) Text("0") }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    "Summe: $totalSum",
+                    color = if (totalSum != 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (totalSum != 0) {
+                    Text(
+                        "Die Summe aller Punkte muss 0 ergeben.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Abbrechen")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            // Übergibt die Map mit den Player-Objekten als Key
+                            onSave(round.id, scoreInts)
+                        },
+                        // Speichern nur erlauben, wenn die Summe 0 ist
+                        enabled = totalSum == 0
+                    ) {
+                        Text("Speichern")
+                    }
+                }
+            }
+        }
+    }
+}
+
+
 @Composable
 fun PlayerManagementDialog(
     players: List<Player>,
@@ -503,35 +673,41 @@ fun PlayerManagementDialog(
                                         contentDescription = "Archivieren",
                                         tint = if (activePlayerCount > 4) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
                                     )
-                                } else {
-                                    IconButton(
-                                        onClick = { onActivatePlayer(player) },
-                                        enabled = activePlayerCount < 7 // GEÄNDERT: Limit auf 7
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Unarchive,
-                                            contentDescription = "Reaktivieren",
-                                            tint = if (activePlayerCount < 6) Color(0xFF008000) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                                        )
-                                    }
+                                }
+                            } else {
+                                IconButton(
+                                    onClick = { onActivatePlayer(player) },
+                                    enabled = activePlayerCount < 7 // GEÄNDERT: Limit auf 7
+                                ) {
+                                    Icon(
+                                        Icons.Default.Unarchive,
+                                        contentDescription = "Reaktivieren",
+                                        tint = if (activePlayerCount < 6) Color(0xFF008000) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                    )
                                 }
                             }
+                            // KORREKTUR: Diese Klammer war zu viel und wurde entfernt (war Zeile 516)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(24.dp))
+                    // KORREKTUR: Spacer und Row in 'item' Blöcke verpackt
+                    item {
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        TextButton(onClick = onDismiss) {
-                            Text("Schließen")
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = onDismiss) {
+                                Text("Schließen")
+                            }
                         }
                     }
                 }
             }
         }
     }
-
+}
 
